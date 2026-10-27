@@ -118,6 +118,10 @@ class ParserHandler
     private function commit(array $data): void
     {
         $coefDangerPriceLess = (100 - $this->message->getPercentDangerPriceLess()) / 100;
+        #значительное снижение относительно текущей цены
+        $dangerByPrice = "VALUES(price)/price < $coefDangerPriceLess";
+        #новая цена близка к предыдущей - текущая цена считается ошибочной и откатывается
+        $rollbackToPrev = "price_prev is not null and VALUES(price)/price_prev >= $coefDangerPriceLess";
         $updateFields = [
             'need_chek',
             'quantity',
@@ -130,6 +134,8 @@ class ParserHandler
             'updated_at',
             'make_name_supplier',
         ];
+        # Порядок важен: MySQL применяет присваивания слева направо, поэтому price_prev
+        # при $dangerByPrice не меняется, а price и updated_at обновляются последними.
         $valuesToUpdate = [
             #need_chek
             "case
@@ -147,25 +153,30 @@ class ParserHandler
                     end
                 else
                     case
-		                when (VALUES(price)/price) < $coefDangerPriceLess
-		                    then 1
-		                    else 0
-	                end
-	        end",
+                        when $dangerByPrice
+                            then
+                                case
+                                    when $rollbackToPrev
+                                        then 0
+                                        else 1
+                                end
+                            else 0
+                    end
+            end",
             "VALUES(quantity)",
             "VALUES(quantity_lot)",
-            #price_prev
+            # price_prev - при откате ошибочная цена в price_prev не попадает
             "case
                 when updated_at = VALUES(updated_at)
                 then 
                     price_prev
                 else
                     case
-		                when (VALUES(price)/price) < $coefDangerPriceLess
-		                    then price_prev
-		                    else price
-	                end
-	        end",
+                        when $dangerByPrice
+                            then price_prev
+                            else price
+                    end
+            end",
             #price_next
             "case
                 when updated_at = VALUES(updated_at)
@@ -173,11 +184,16 @@ class ParserHandler
                     price_next
                 else
                     case
-		                when (VALUES(price)/price) < $coefDangerPriceLess
-		                    then VALUES(price)
-		                    else null
-	                end
-	        end",
+                        when $dangerByPrice
+                            then
+                                case
+                                    when $rollbackToPrev
+                                        then null
+                                        else VALUES(price)
+                                end
+                            else null
+                    end
+            end",
             #price
             "case
                 when updated_at = VALUES(updated_at)
@@ -189,11 +205,16 @@ class ParserHandler
                     end
                 else
                     case 
-		                when VALUES(price)/price < $coefDangerPriceLess
-		                    then price
-		                    else VALUES(price)
-	                end
-	        end",
+                        when $dangerByPrice
+                            then
+                                case
+                                    when $rollbackToPrev
+                                        then VALUES(price)
+                                        else price
+                                end
+                            else VALUES(price)
+                    end
+            end",
             "VALUES(date)",
             "VALUES(date_quant)",
             "VALUES(updated_at)",
